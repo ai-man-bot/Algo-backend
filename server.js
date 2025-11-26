@@ -1,10 +1,10 @@
 /**
- * AlgoFinance Backend Server (Gemini AI Edition)
- * * Responsibilities:
+ * AlgoFinance Backend Server (Gemini AI Edition + History)
+ * Responsibilities:
  * 1. Receive Webhooks from TradingView
  * 2. Analyze Signals with Google Gemini AI
  * 3. Execute Orders on Alpaca
- * * Dependencies: express, cors, body-parser, @alpacahq/alpaca-trade-api, dotenv, @google/generative-ai
+ * 4. Serve Portfolio History
  */
 
 const express = require('express');
@@ -28,10 +28,10 @@ const alpaca = new Alpaca({
   paper: true,
 });
 
-// Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- In-Memory Store ---
+// Storing more logs for better history on frontend
 let logs = [];
 const addLog = (type, source, message) => {
   const log = {
@@ -42,14 +42,14 @@ const addLog = (type, source, message) => {
     message
   };
   logs.unshift(log);
-  if (logs.length > 50) logs.pop();
+  if (logs.length > 200) logs.pop(); // Keep last 200
 };
 
 // --- Endpoints ---
 
-app.get('/', (req, res) => res.send('AlgoFinance Backend (Gemini) is Running'));
+app.get('/', (req, res) => res.send('AlgoFinance Backend is Running'));
 
-// The Smart Webhook
+// 1. Webhook Endpoint
 app.post('/webhook', async (req, res) => {
   const signal = req.body;
   console.log('Received Signal:', signal);
@@ -58,17 +58,16 @@ app.post('/webhook', async (req, res) => {
   if (!signal.ticker || !signal.action) return res.status(400).send('Invalid payload');
 
   try {
-    // --- STEP 1: AI ANALYSIS ---
-    // We ask Gemini to act as a Risk Manager
-    addLog('AI_ANALYSIS', 'Gemini Pro', 'Analyzing market conditions...');
+    // AI Analysis
+    addLog('AI_ANALYSIS', 'Gemini Pro', `Analyzing risk for ${signal.ticker}...`);
     
     const model = genAI.getGenerativeModel({ model: "gemini-pro"});
     const prompt = `
-      Act as a strict financial risk manager. I have a signal to ${signal.action} ${signal.ticker} at price ${signal.price}.
-      The timestamp is ${signal.timestamp || 'now'}.
-      
-      Respond with strictly ONE word: "APPROVE" or "DENY".
-      (For this simulation, approve if the ticker is a major tech stock or crypto, deny if obscure).
+      Act as a financial risk manager. 
+      Signal: ${signal.action} ${signal.ticker} at ${signal.price}.
+      Context: Current Market.
+      Task: Respond with strictly ONE word: "APPROVE" or "DENY".
+      Criteria: Deny if it sounds like a scam token or extremely low volume penny stock. Approve major stocks/crypto.
     `;
 
     const result = await model.generateContent(prompt);
@@ -78,14 +77,14 @@ app.post('/webhook', async (req, res) => {
     addLog('AI_ANALYSIS', 'Gemini Pro', `Decision: ${decision}`);
 
     if (decision.includes("DENY")) {
-        return res.status(200).send('Trade Denied by AI Risk Manager');
+        return res.status(200).send('Trade Denied by AI');
     }
 
-    // --- STEP 2: EXECUTION ---
+    // Execution
     const side = signal.action.toLowerCase();
     const qty = signal.contracts || 1;
 
-    const order = await alpaca.createOrder({
+    await alpaca.createOrder({
       symbol: signal.ticker,
       qty: qty,
       side: side,
@@ -93,7 +92,7 @@ app.post('/webhook', async (req, res) => {
       time_in_force: 'day'
     });
 
-    addLog('EXECUTION', 'Alpaca', `Order Filled: ${side.toUpperCase()} ${qty} ${signal.ticker}`);
+    addLog('EXECUTION', 'Alpaca', `Filled: ${side.toUpperCase()} ${qty} ${signal.ticker}`);
     res.status(200).send('Order Executed');
 
   } catch (error) {
@@ -103,8 +102,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Frontend Data
+// 2. Data Endpoints
 app.get('/api/logs', (req, res) => res.json(logs));
+
 app.get('/api/account', async (req, res) => {
   try {
     const account = await alpaca.getAccount();
@@ -112,6 +112,30 @@ app.get('/api/account', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// NEW: Fetch Historical Portfolio Data for Chart
+app.get('/api/history', async (req, res) => {
+    try {
+        // Fetch 1 month of history
+        const history = await alpaca.getPortfolioHistory({
+            period: '1M',
+            timeframe: '1D',
+            extended_hours: true
+        });
+        
+        // Format for Recharts
+        const formatted = history.timestamp.map((t, i) => ({
+            date: new Date(t * 1000).toLocaleDateString(),
+            equity: history.equity[i],
+            profit_loss: history.profit_loss[i]
+        }));
+        
+        res.json(formatted);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
