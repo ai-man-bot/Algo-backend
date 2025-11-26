@@ -3,6 +3,7 @@
  * 1. Webhooks execute trades IMMEDIATELY (Trusting the source).
  * 2. Gemini analyzes the trade context POST-EXECUTION.
  * 3. New endpoint to analyze entire portfolio balance.
+ * 4. New endpoint to fetch full trade history.
  */
 
 const express = require('express');
@@ -147,8 +148,10 @@ app.get('/api/analyze-portfolio', async (req, res) => {
     }
 });
 
-// Data Endpoints
+// --- 3. Data Endpoints ---
+
 app.get('/api/logs', (req, res) => res.json(logs));
+
 app.get('/api/account', async (req, res) => {
   try {
     const account = await alpaca.getAccount();
@@ -157,6 +160,7 @@ app.get('/api/account', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 app.get('/api/history', async (req, res) => {
     try {
         const history = await alpaca.getPortfolioHistory({ period: '1M', timeframe: '1D', extended_hours: true });
@@ -167,6 +171,22 @@ app.get('/api/history', async (req, res) => {
         }));
         res.json(formatted);
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// NEW: Fetch Trade History
+app.get('/api/trades', async (req, res) => {
+    try {
+        // Fetch closed orders to show history
+        const orders = await alpaca.getOrders({
+            status: 'all',
+            limit: 50,
+            nested: true 
+        });
+        res.json(orders);
+    } catch (error) {
+        console.error(error);
         res.status(500).json({ error: error.message });
     }
 });
